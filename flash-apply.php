@@ -10,6 +10,9 @@ const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostA
 const PROPOSAL_KEYS = ['template', 'summary', 'set', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
+// The unRAID major version this script was tested on. A new major version may store templates differently, so it
+// stops until someone has checked and released a version with this number raised. There is deliberately no override.
+const TESTED_MAJOR = 7;
 
 $root = getenv('FLASH_APPLY_ROOT') ?: '';
 $templatesDir = $root . '/boot/config/plugins/dockerMan/templates-user';
@@ -165,6 +168,17 @@ function hidden(string $value): string
 
 if (!class_exists('DOMDocument') || !function_exists('mb_check_encoding')) {
     fail('This PHP has no DOM or mbstring extension');
+}
+
+$versionFile = $root . '/etc/unraid-version';
+$versionText = is_file($versionFile) ? (string) file_get_contents($versionFile) : '';
+
+if (!preg_match('/version="(\d+)\.[^"]*"/', $versionText, $version)) {
+    fail('Could not read the unRAID version; nothing was changed');
+}
+
+if ((int) $version[1] !== TESTED_MAJOR) {
+    fail("Tested on unRAID " . TESTED_MAJOR . ".x, this is {$version[1]}.x; validate templates on it and install a release that allows it");
 }
 
 $name = $argv[1] ?? '';

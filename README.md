@@ -17,6 +17,10 @@ It shows what would change, computed from the template before and after, with ex
 
 Proposals are read from `/mnt/cache/appdata/code-server/flash-proposals`; set `FLASH_APPLY_PROPOSALS` to change that.
 
+## unRAID versions
+
+It refuses to run on any unRAID major version other than the one in `TESTED_MAJOR`. There is no override: after checking templates on a new major version, raise the number, release, and reinstall.
+
 ## Proposal format
 
 ```json

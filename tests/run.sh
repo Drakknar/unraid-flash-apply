@@ -7,7 +7,8 @@ export FLASH_APPLY_ROOT="$root"
 export FLASH_APPLY_PROPOSALS=/proposals
 tpl="$root/boot/config/plugins/dockerMan/templates-user"
 props="$root/proposals"
-mkdir -p "$tpl" "$props"
+mkdir -p "$tpl" "$props" "$root/etc"
+echo 'version="7.3.4"' > "$root/etc/unraid-version"
 SECRET=fake-existing-secret-value
 fails=0
 
@@ -116,6 +117,21 @@ expect "refuses a path as proposal name" "without a path"
 ln -sf "$props/p2.json" "$props/link.json"
 out=$(script -qec "php '$here/flash-apply.php' link.json" /dev/null 2>&1)
 expect "refuses a linked proposal" "is a link"
+
+# --- unRAID version gate
+reset_template
+for v in 'version="8.0.0"' 'version="6.12.1"' 'nonsense'; do
+  echo "$v" > "$root/etc/unraid-version"
+  run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
+  expect "version gate refuses: $v" "Refused"
+  unchanged "version gate writes nothing: $v"
+done
+rm "$root/etc/unraid-version"
+run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
+expect "missing version file refused" "Could not read"
+echo 'version="7.9.0"' > "$root/etc/unraid-version"
+run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
+expect "same major is allowed" "Written."
 
 rm -rf "$root"
 [ "$fails" = 0 ] && echo "All tests passed" || { echo "$fails failed"; exit 1; }
