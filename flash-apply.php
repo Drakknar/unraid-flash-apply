@@ -237,6 +237,7 @@ function buildChange(array $proposal): array
 
     // Added to Extra Parameters, keeping what is there
     $append = trim(requireText($proposal['append_extra_params'] ?? '', 'append_extra_params'));
+    $appended = false;
 
     if ($append !== '') {
         $node = $doc->documentElement->getElementsByTagName('ExtraParams')->item(0);
@@ -249,6 +250,7 @@ function buildChange(array $proposal): array
             }
 
             $node->textContent = $old === '' ? $append : "$old $append";
+            $appended = true;
             $note('ExtraParams (added at the end)', $old === '' ? '(empty)' : '[existing value kept, hidden]', ($old === '' ? '' : '[existing value] ') . $append, 'Extra Parameters can grant any Docker right');
         }
     }
@@ -305,11 +307,17 @@ function buildChange(array $proposal): array
             fail("replace_in_variables.$key needs from and to");
         }
 
-        $node = findConfig($doc, 'Variable', $key);
+        $matches = array_filter(findConfigs($doc, 'Variable'), fn ($c) => $c->getAttribute('Target') === $key);
 
-        if (!$node) {
+        if (!$matches) {
             fail("$template has no variable $key");
         }
+
+        if (count($matches) > 1) {
+            fail("$template has more than one variable $key; fix it by hand");
+        }
+
+        $node = reset($matches);
 
         if (str_contains($node->textContent, $from)) {
             $node->textContent = str_replace($from, $to, $node->textContent);
@@ -397,12 +405,19 @@ function buildChange(array $proposal): array
 
     foreach (requireList($ports['remove'] ?? [], 'ports.remove') as $target) {
         $target = portNumber($target, 'port container');
-        $node = findConfig($doc, 'Port', $target);
+        $found = false;
 
-        if ($node) {
-            $from = $node->textContent;
+        // A port can have one entry per protocol: leaving one behind would keep it published.
+        while ($node = findConfig($doc, 'Port', $target)) {
+            $found = true;
+            $from = $node->textContent . '/' . $node->getAttribute('Mode');
             $node->parentNode->removeChild($node);
             $note("Port $target removed", $from, '(none)');
+        }
+
+        // Moving a port without removing the old mapping would leave it open, or clash when the container starts.
+        if (!$found && $appended) {
+            fail("$template has no port entry for container port $target, so it can't be moved");
         }
     }
 

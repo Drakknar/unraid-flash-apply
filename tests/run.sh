@@ -149,6 +149,59 @@ expect "replace refuses when nothing matches" "neither the old nor the new"
 run p4 '{"template":"my-app.xml","replace_in_variables":{"MISSING":{"from":"a","to":"b"}}}' apply
 expect "replace refuses a missing variable" "has no variable"
 
+# --- values survive a rewrite exactly
+reset_template
+cat > "$tpl/my-rt.xml" <<'X'
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>rt</Name>
+  <Repository>old/image:1</Repository>
+  <ExtraParams>--a=1 --b="x y"</ExtraParams>
+  <Overview>Caf&#xE9; &lt;b&gt;bold&lt;/b&gt; &amp; more</Overview>
+  <Config Name="Url" Target="URL" Default="d&amp;e" Mode="" Description="say &quot;hi&quot;" Type="Variable" Display="always" Required="false" Mask="true">postgres://u:p&amp;w&lt;d%24$x'"é@192.168.1.4:5/db?a=1&amp;b=2</Config>
+  <Config Name="Json" Target="JSON" Default="" Mode="" Description="" Type="Variable" Display="always" Required="false" Mask="false">{"k":"a&amp;b","n":"&lt;x&gt;","u":"ü"}</Config>
+  <Config Name="Keep" Target="KEEP" Default="" Mode="" Description="" Type="Variable" Display="always" Required="false" Mask="false">  spaced  </Config>
+  <Config Name="Empty" Target="EMPTY" Default="fallback" Mode="" Description="" Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="P" Target="53" Default="" Mode="tcp" Description="" Type="Port" Display="always" Required="false" Mask="false">53</Config>
+  <Config Name="P" Target="53" Default="" Mode="udp" Description="" Type="Port" Display="always" Required="false" Mask="false">53</Config>
+</Container>
+X
+cat > "$root/rt.php" <<'X'
+<?php
+$d = new DOMDocument(); $d->load($argv[1]); $o = [];
+foreach ($d->getElementsByTagName('Config') as $c) { $a = []; foreach ($c->attributes as $n) { $a[$n->name] = $n->value; } $o[] = [$a, $c->textContent]; }
+foreach (['Name', 'Repository', 'ExtraParams', 'Overview'] as $f) { $o[$f] = $d->getElementsByTagName($f)->item(0)->textContent; }
+echo json_encode($o, JSON_UNESCAPED_UNICODE);
+X
+before=$(php "$root/rt.php" "$tpl/my-rt.xml")
+run rt1 '{"template":"my-rt.xml","variables":{"set":{"NEWVAR":"1"}}}' apply
+expect "round trip applied" "Written:"
+after=$(php "$root/rt.php" "$tpl/my-rt.xml" | sed 's/,\[{"Name":"NEWVAR".*\]\]*,"Name"/,"Name"/')
+want=$(printf '%s' "$before" | sed 's/\],"Name"/],"Name"/')
+out="before=$before
+after =$(php "$root/rt.php" "$tpl/my-rt.xml")"
+for s in 'p&w<d%24$x' 'a=1&b=2' '"k":"a&b"' '"n":"<x>"' 'ü' '  spaced  ' 'fallback' 'Café <b>bold</b> & more' '--b=\"x y\"' 'd&e' 'say \"hi\"'; do
+  if php "$root/rt.php" "$tpl/my-rt.xml" | grep -qF -- "$s"; then ok "survives: $s"; else bad "survives: $s"; fi
+done
+run rt2 '{"template":"my-rt.xml","replace_in_variables":{"URL":{"from":"192.168.1.4:5","to":"172.17.0.1:5"}}}' apply
+if php "$root/rt.php" "$tpl/my-rt.xml" | grep -qF "postgres://u:p&w<d%24\$x'\\\"é@172.17.0.1:5/db?a=1&b=2"; then ok "replace keeps special characters"; else out=$(php "$root/rt.php" "$tpl/my-rt.xml"); bad "replace keeps special characters"; fi
+
+# --- moving a port
+run mv1 '{"template":"my-rt.xml","append_extra_params":"-p 172.17.0.1:53:53","ports":{"remove":[9999]}}' "apply dangerous"
+expect "move refused when the port entry is missing" "can't be moved"
+if grep -q '172.17.0.1:53:53' "$tpl/my-rt.xml"; then bad "refused move wrote nothing"; else ok "refused move wrote nothing"; fi
+run mv2 '{"template":"my-rt.xml","append_extra_params":"-p 172.17.0.1:53:53","ports":{"remove":[53]}}' "apply dangerous"
+if grep -q 'Type="Port"' "$tpl/my-rt.xml"; then out=$(cat "$tpl/my-rt.xml"); bad "both protocol entries removed"; else ok "both protocol entries removed"; fi
+run mv3 '{"template":"my-rt.xml","append_extra_params":"-p 172.17.0.1:53:53","ports":{"remove":[53]}}' "apply dangerous"
+expect "repeating a finished move is safe" "already match"
+cat > "$tpl/my-dup.xml" <<'X'
+<?xml version="1.0"?>
+<Container><Config Target="A" Type="Variable">one</Config><Config Target="A" Type="Variable">two</Config></Container>
+X
+run dup '{"template":"my-dup.xml","replace_in_variables":{"A":{"from":"one","to":"new"}}}' apply
+expect "replace refuses a duplicated variable" "more than one"
+rm -f "$tpl/my-rt.xml" "$tpl/my-dup.xml"
+
 # --- batches
 reset_template
 sed 's/old\/image:1/second\/image:1/' "$tpl/my-app.xml" > "$tpl/my-two.xml"
