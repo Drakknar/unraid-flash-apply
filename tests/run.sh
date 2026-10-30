@@ -81,7 +81,7 @@ unchanged "no terminal changes nothing"
 reset_template
 for case in \
   '{"template":"my-app.xml","set":{"Privileged":"true"}}|privileged mode' \
-  '{"template":"my-app.xml","set":{"ExtraParams":"--cap-add=ALL"}}|Extra Parameters' \
+  '{"template":"my-app.xml","append_extra_params":"--cap-add=ALL"}|Extra Parameters' \
   '{"template":"my-app.xml","paths":{"set":[{"container":"/s","host":"/var/run/docker.sock","mode":"rw"}]}}|control of Docker' \
   '{"template":"my-app.xml","paths":{"set":[{"container":"/b","host":"/boot","mode":"ro"}]}}|host system folder' \
   '{"template":"my-app.xml","paths":{"set":[{"container":"/m","host":"/mnt/user","mode":"rw"}]}}|whole disk or share' \
@@ -117,6 +117,23 @@ expect "refuses a path as proposal name" "without a path"
 ln -sf "$props/p2.json" "$props/link.json"
 out=$(script -qec "php '$here/flash-apply.php' link.json" /dev/null 2>&1)
 expect "refuses a linked proposal" "is a link"
+
+# --- Extra Parameters
+reset_template
+run e1 '{"template":"my-app.xml","set":{"ExtraParams":"-p 1:2"}}' "apply dangerous"
+expect "won't replace an existing value" "already has a value"
+file_has "existing value kept after refusal" "--secret-param=$SECRET"
+run e2 '{"template":"my-app.xml","append_extra_params":"-p 172.17.0.1:1:2"}' "apply dangerous"
+expect "append applied" "Written."
+never "append doesn't print the old value" "$SECRET"
+file_has "append keeps the old value" "--secret-param=$SECRET -p 172.17.0.1:1:2"
+run e3 '{"template":"my-app.xml","append_extra_params":"-p 172.17.0.1:1:2"}' "apply dangerous"
+expect "second append changes nothing" "already matches"
+sed -i "s#<ExtraParams>.*</ExtraParams>#<ExtraParams></ExtraParams>#" "$tpl/my-app.xml"
+run e4 '{"template":"my-app.xml","set":{"ExtraParams":"-p 3:4"}}' "apply dangerous"
+file_has "set works on an empty value" ">-p 3:4<"
+run e5 '{"template":"my-app.xml","append_extra_params":"x\u001b[2J"}' stop
+expect "append refuses control characters" "control characters"
 
 # --- unRAID version gate
 reset_template

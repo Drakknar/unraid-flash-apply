@@ -7,7 +7,7 @@
 
 const MAX_PROPOSAL_BYTES = 65536;
 const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostArgs', 'WebUI'];
-const PROPOSAL_KEYS = ['template', 'summary', 'set', 'variables', 'paths', 'ports'];
+const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
 // The unRAID release this script was tested on; any 7.3.x counts. Another release may store templates differently, so
@@ -256,6 +256,11 @@ foreach ($set as $field => $value) {
         continue;
     }
 
+    // The old value is hidden from the proposal's author and from this display, so it can't be replaced blind.
+    if ($field === 'ExtraParams' && trim($old) !== '') {
+        fail('ExtraParams already has a value; use append_extra_params, or change it by hand in the Docker tab');
+    }
+
     if (!$node) {
         $node = $doc->createElement($field);
         $doc->documentElement->appendChild($node);
@@ -272,6 +277,24 @@ foreach ($set as $field => $value) {
     };
     $shownOld = in_array($field, ['ExtraParams', 'PostArgs'], true) ? hidden($old) : $old;
     $note($field, $shownOld, $value, $warning);
+}
+
+// Added to Extra Parameters, keeping what is there
+$append = trim(requireText($proposal['append_extra_params'] ?? '', 'append_extra_params'));
+
+if ($append !== '') {
+    $node = $doc->documentElement->getElementsByTagName('ExtraParams')->item(0);
+    $old = $node ? trim($node->textContent) : '';
+
+    if (!preg_match('/(^|\s)' . preg_quote($append, '/') . '(\s|$)/', $old)) {
+        if (!$node) {
+            $node = $doc->createElement('ExtraParams');
+            $doc->documentElement->appendChild($node);
+        }
+
+        $node->textContent = $old === '' ? $append : "$old $append";
+        $note('ExtraParams (added at the end)', $old === '' ? '(empty)' : '[existing value kept, hidden]', ($old === '' ? '' : '[existing value] ') . $append, 'Extra Parameters can grant any Docker right');
+    }
 }
 
 // Variables

@@ -28,13 +28,14 @@ It refuses to run on any unRAID release other than the one in `TESTED_RELEASE` (
   "template": "my-app.xml",
   "summary": "Why this change is wanted",
   "set": { "Repository": "ghcr.io/me/app:latest" },
+  "append_extra_params": "-p 172.17.0.1:64000:8080",
   "variables": { "set": { "HEALTH_URL": "http://host/healthz" }, "remove": ["OLD"] },
   "paths": { "set": [{ "container": "/data", "host": "/mnt/user/appdata/app/data", "mode": "rw" }], "remove": ["/app"] },
   "ports": { "set": [{ "container": 8080, "host": 64000, "protocol": "tcp" }], "remove": [80] }
 }
 ```
 
-`set` accepts `Repository`, `Network`, `Privileged`, `ExtraParams`, `PostArgs` and `WebUI`. Everything else is refused, including unknown fields, control characters, link files and names with a path.
+`set` accepts `Repository`, `Network`, `Privileged`, `ExtraParams`, `PostArgs` and `WebUI`. `ExtraParams` can only be set while it is empty, because the old value stays hidden; `append_extra_params` adds to the end and keeps what is there. Everything else is refused, including unknown fields, control characters, link files and names with a path.
 
 ## What it doesn't protect against
 
