@@ -5,9 +5,9 @@
 // it is validated field by field, what is shown comes from comparing the template before and after, and existing
 // values are never printed. See README.md.
 
-const MAX_PROPOSAL_BYTES = 65536;
+const MAX_PROPOSAL_BYTES = 262144;
 const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostArgs', 'WebUI'];
-const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'variables', 'paths', 'ports'];
+const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'replace_in_variables', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
 // The unRAID release this script was tested on; any 7.3.x counts. Another release may store templates differently, so
@@ -166,6 +166,249 @@ function hidden(string $value): string
     return $value === '' ? '(empty)' : '[existing value hidden]';
 }
 
+// Validates one proposal and works out its changes on a copy of the template; writes nothing.
+function buildChange(array $proposal): array
+{
+    global $templatesDir;
+
+    requireKeys($proposal, PROPOSAL_KEYS, 'Proposal');
+    $template = requireText($proposal['template'] ?? null, 'template', 200);
+    $summary = requireText($proposal['summary'] ?? '', 'summary', 500);
+
+    if (!preg_match('/^my-[A-Za-z0-9][A-Za-z0-9._-]*\.xml$/', $template)) {
+        fail('template must be a my-*.xml file name');
+    }
+
+    $templateFile = "$templatesDir/$template";
+
+    if (is_link($templateFile) || !is_file($templateFile)) {
+        fail('Template not found, or it is a link');
+    }
+
+    $before = file_get_contents($templateFile);
+    $doc = new DOMDocument();
+    $doc->preserveWhiteSpace = false;
+    $doc->formatOutput = true;
+
+    if (!@$doc->loadXML($before, LIBXML_NONET) || $doc->documentElement->tagName !== 'Container' || $doc->doctype !== null) {
+        fail('Template is not a plain Container XML file');
+    }
+
+    $changes = [];
+    $note = function (string $what, string $from, string $to, ?string $warning = null) use (&$changes) {
+        $changes[] = ['what' => $what, 'from' => $from, 'to' => $to, 'warning' => $warning];
+    };
+
+    // Top-level fields
+    $set = requireMap($proposal['set'] ?? [], 'set');
+    requireKeys($set, SET_FIELDS, 'set');
+
+    foreach ($set as $field => $value) {
+        $value = requireText($value, "set.$field");
+        $node = $doc->documentElement->getElementsByTagName($field)->item(0);
+        $old = $node ? $node->textContent : '';
+
+        if ($old === $value) {
+            continue;
+        }
+
+        // The old value is hidden from the proposal's author and from this display, so it can't be replaced blind.
+        if ($field === 'ExtraParams' && trim($old) !== '') {
+            fail('ExtraParams already has a value; use append_extra_params, or change it by hand in the Docker tab');
+        }
+
+        if (!$node) {
+            $node = $doc->createElement($field);
+            $doc->documentElement->appendChild($node);
+        }
+
+        $node->textContent = $value;
+        $warning = match ($field) {
+            'Privileged' => strtolower($value) === 'true' ? 'privileged mode is equal to root on the host' : null,
+            'ExtraParams' => 'Extra Parameters can grant any Docker right',
+            'PostArgs' => 'changes the command the container runs',
+            'Repository' => 'changes which code runs',
+            'Network' => 'changes what the container can reach',
+            default => null,
+        };
+        $shownOld = in_array($field, ['ExtraParams', 'PostArgs'], true) ? hidden($old) : $old;
+        $note($field, $shownOld, $value, $warning);
+    }
+
+    // Added to Extra Parameters, keeping what is there
+    $append = trim(requireText($proposal['append_extra_params'] ?? '', 'append_extra_params'));
+
+    if ($append !== '') {
+        $node = $doc->documentElement->getElementsByTagName('ExtraParams')->item(0);
+        $old = $node ? trim($node->textContent) : '';
+
+        if (!preg_match('/(^|\s)' . preg_quote($append, '/') . '(\s|$)/', $old)) {
+            if (!$node) {
+                $node = $doc->createElement('ExtraParams');
+                $doc->documentElement->appendChild($node);
+            }
+
+            $node->textContent = $old === '' ? $append : "$old $append";
+            $note('ExtraParams (added at the end)', $old === '' ? '(empty)' : '[existing value kept, hidden]', ($old === '' ? '' : '[existing value] ') . $append, 'Extra Parameters can grant any Docker right');
+        }
+    }
+
+    // Variables
+    $variables = requireMap($proposal['variables'] ?? [], 'variables');
+    requireKeys($variables, ['set', 'remove'], 'variables');
+
+    foreach (requireMap($variables['set'] ?? [], 'variables.set') as $key => $value) {
+        $key = requireText($key, 'variable name', 200);
+
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $key)) {
+            fail('Bad variable name');
+        }
+
+        $value = requireText($value, "variable $key");
+        $warning = preg_match('/^(LD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|PATH$|DOCKER_|SUDO_|BASH_ENV$|ENV$)/', $key) ? 'this variable can change what code runs' : null;
+        $node = findConfig($doc, 'Variable', $key);
+
+        if ($node) {
+            if ($node->textContent === $value) {
+                continue;
+            }
+
+            $old = $node->textContent;
+            $node->textContent = $value;
+            $note("Variable $key", hidden($old), $value, $warning);
+        } else {
+            addConfig($doc, 'Variable', $key, $value, '');
+            $note("Variable $key (new)", '(none)', $value, $warning);
+        }
+    }
+
+    foreach (requireList($variables['remove'] ?? [], 'variables.remove') as $key) {
+        $key = requireText($key, 'variable name', 200);
+        $node = findConfig($doc, 'Variable', $key);
+
+        if ($node) {
+            $old = $node->textContent;
+            $node->parentNode->removeChild($node);
+            $note("Variable $key removed", hidden($old), '(none)');
+        }
+    }
+
+    // Part of a value, for values holding a secret: the rest is neither seen nor changed
+    foreach (requireMap($proposal['replace_in_variables'] ?? [], 'replace_in_variables') as $key => $edit) {
+        $key = requireText($key, 'variable name', 200);
+        $edit = requireMap($edit, "replace_in_variables.$key");
+        requireKeys($edit, ['from', 'to'], "replace_in_variables.$key");
+        $from = requireText($edit['from'] ?? '', 'from', 200);
+        $to = requireText($edit['to'] ?? '', 'to', 200);
+
+        if ($from === '' || $to === '') {
+            fail("replace_in_variables.$key needs from and to");
+        }
+
+        $node = findConfig($doc, 'Variable', $key);
+
+        if (!$node) {
+            fail("$template has no variable $key");
+        }
+
+        if (str_contains($node->textContent, $from)) {
+            $node->textContent = str_replace($from, $to, $node->textContent);
+            $note("Variable $key (part of the value)", "[hidden] ... $from ... [hidden]", "[hidden] ... $to ... [hidden]");
+        } elseif (!str_contains($node->textContent, $to)) {
+            fail("Variable $key in $template contains neither the old nor the new text");
+        }
+    }
+
+    // Paths
+    $paths = requireMap($proposal['paths'] ?? [], 'paths');
+    requireKeys($paths, ['set', 'remove'], 'paths');
+
+    foreach (requireList($paths['set'] ?? [], 'paths.set') as $entry) {
+        $entry = requireMap($entry, 'path');
+        requireKeys($entry, ['container', 'host', 'mode'], 'path');
+        $target = containerPath($entry['container'] ?? null, 'path container');
+        $host = containerPath($entry['host'] ?? null, 'path host');
+        $mode = requireText($entry['mode'] ?? 'rw', 'path mode', 20);
+
+        if (!in_array($mode, PATH_MODES, true)) {
+            fail('Bad path mode');
+        }
+
+        $warning = hostPathWarning($host);
+        $node = findConfig($doc, 'Path', $target);
+
+        if ($node) {
+            if ($node->textContent === $host && $node->getAttribute('Mode') === $mode) {
+                continue;
+            }
+
+            $from = $node->textContent . ' (' . $node->getAttribute('Mode') . ')';
+            $node->textContent = $host;
+            $node->setAttribute('Mode', $mode);
+            $note("Path $target", $from, "$host ($mode)", $warning);
+        } else {
+            addConfig($doc, 'Path', $target, $host, $mode);
+            $note("Path $target (new)", '(none)', "$host ($mode)", $warning);
+        }
+    }
+
+    foreach (requireList($paths['remove'] ?? [], 'paths.remove') as $target) {
+        $target = containerPath($target, 'path container');
+        $node = findConfig($doc, 'Path', $target);
+
+        if ($node) {
+            $from = $node->textContent;
+            $node->parentNode->removeChild($node);
+            $note("Path $target removed", $from, '(none)');
+        }
+    }
+
+    // Ports
+    $ports = requireMap($proposal['ports'] ?? [], 'ports');
+    requireKeys($ports, ['set', 'remove'], 'ports');
+
+    foreach (requireList($ports['set'] ?? [], 'ports.set') as $entry) {
+        $entry = requireMap($entry, 'port');
+        requireKeys($entry, ['container', 'host', 'protocol'], 'port');
+        $target = portNumber($entry['container'] ?? null, 'port container');
+        $host = portNumber($entry['host'] ?? null, 'port host');
+        $protocol = requireText($entry['protocol'] ?? 'tcp', 'port protocol', 5);
+
+        if (!in_array($protocol, PROTOCOLS, true)) {
+            fail('Bad port protocol');
+        }
+
+        $node = findConfig($doc, 'Port', $target);
+
+        if ($node) {
+            if ($node->textContent === $host && $node->getAttribute('Mode') === $protocol) {
+                continue;
+            }
+
+            $from = $node->textContent . '/' . $node->getAttribute('Mode');
+            $node->textContent = $host;
+            $node->setAttribute('Mode', $protocol);
+            $note("Port $target", $from, "$host/$protocol", 'publishes the container on the network');
+        } else {
+            addConfig($doc, 'Port', $target, $host, $protocol);
+            $note("Port $target (new)", '(none)', "$host/$protocol", 'publishes the container on the network');
+        }
+    }
+
+    foreach (requireList($ports['remove'] ?? [], 'ports.remove') as $target) {
+        $target = portNumber($target, 'port container');
+        $node = findConfig($doc, 'Port', $target);
+
+        if ($node) {
+            $from = $node->textContent;
+            $node->parentNode->removeChild($node);
+            $note("Port $target removed", $from, '(none)');
+        }
+    }
+
+    return ['template' => $template, 'file' => $templateFile, 'before' => $before, 'doc' => $doc, 'changes' => $changes, 'summary' => $summary];
+}
+
 if (!class_exists('DOMDocument') || !function_exists('mb_check_encoding')) {
     fail('This PHP has no DOM or mbstring extension');
 }
@@ -209,243 +452,65 @@ if ($raw === false || strlen($raw) > MAX_PROPOSAL_BYTES) {
     fail('Proposal is unreadable or too large');
 }
 
-$proposal = json_decode($raw, true, 8);
+$proposal = json_decode($raw, true, 10);
 
 if (!is_array($proposal)) {
     fail('Proposal is not valid JSON');
 }
 
-requireKeys($proposal, PROPOSAL_KEYS, 'Proposal');
-$template = requireText($proposal['template'] ?? null, 'template', 200);
-$summary = requireText($proposal['summary'] ?? '', 'summary', 500);
-
-if (!preg_match('/^my-[A-Za-z0-9][A-Za-z0-9._-]*\.xml$/', $template)) {
-    fail('template must be a my-*.xml file name');
+// One proposal, or a batch: {"summary": "...", "changes": [proposal, proposal]}. A batch is all or nothing.
+if (isset($proposal['changes'])) {
+    requireKeys($proposal, ['summary', 'changes'], 'Batch');
+    $overall = requireText($proposal['summary'] ?? '', 'summary', 500);
+    $list = requireList($proposal['changes'], 'changes');
+} else {
+    $overall = '';
+    $list = [$proposal];
 }
 
-$templateFile = "$templatesDir/$template";
+$built = [];
 
-if (is_link($templateFile) || !is_file($templateFile)) {
-    fail('Template not found, or it is a link');
+foreach ($list as $entry) {
+    $one = buildChange(requireMap($entry, 'change'));
+
+    if (isset($built[$one['template']])) {
+        fail('A template appears twice in this batch: ' . $one['template']);
+    }
+
+    $built[$one['template']] = $one;
 }
 
-$before = file_get_contents($templateFile);
-$doc = new DOMDocument();
-$doc->preserveWhiteSpace = false;
-$doc->formatOutput = true;
+$work = array_filter($built, fn ($b) => $b['changes']);
 
-if (!@$doc->loadXML($before, LIBXML_NONET) || $doc->documentElement->tagName !== 'Container' || $doc->doctype !== null) {
-    fail('Template is not a plain Container XML file');
-}
-
-$changes = [];
-$note = function (string $what, string $from, string $to, ?string $warning = null) use (&$changes) {
-    $changes[] = ['what' => $what, 'from' => $from, 'to' => $to, 'warning' => $warning];
-};
-
-// Top-level fields
-$set = requireMap($proposal['set'] ?? [], 'set');
-requireKeys($set, SET_FIELDS, 'set');
-
-foreach ($set as $field => $value) {
-    $value = requireText($value, "set.$field");
-    $node = $doc->documentElement->getElementsByTagName($field)->item(0);
-    $old = $node ? $node->textContent : '';
-
-    if ($old === $value) {
-        continue;
-    }
-
-    // The old value is hidden from the proposal's author and from this display, so it can't be replaced blind.
-    if ($field === 'ExtraParams' && trim($old) !== '') {
-        fail('ExtraParams already has a value; use append_extra_params, or change it by hand in the Docker tab');
-    }
-
-    if (!$node) {
-        $node = $doc->createElement($field);
-        $doc->documentElement->appendChild($node);
-    }
-
-    $node->textContent = $value;
-    $warning = match ($field) {
-        'Privileged' => strtolower($value) === 'true' ? 'privileged mode is equal to root on the host' : null,
-        'ExtraParams' => 'Extra Parameters can grant any Docker right',
-        'PostArgs' => 'changes the command the container runs',
-        'Repository' => 'changes which code runs',
-        'Network' => 'changes what the container can reach',
-        default => null,
-    };
-    $shownOld = in_array($field, ['ExtraParams', 'PostArgs'], true) ? hidden($old) : $old;
-    $note($field, $shownOld, $value, $warning);
-}
-
-// Added to Extra Parameters, keeping what is there
-$append = trim(requireText($proposal['append_extra_params'] ?? '', 'append_extra_params'));
-
-if ($append !== '') {
-    $node = $doc->documentElement->getElementsByTagName('ExtraParams')->item(0);
-    $old = $node ? trim($node->textContent) : '';
-
-    if (!preg_match('/(^|\s)' . preg_quote($append, '/') . '(\s|$)/', $old)) {
-        if (!$node) {
-            $node = $doc->createElement('ExtraParams');
-            $doc->documentElement->appendChild($node);
-        }
-
-        $node->textContent = $old === '' ? $append : "$old $append";
-        $note('ExtraParams (added at the end)', $old === '' ? '(empty)' : '[existing value kept, hidden]', ($old === '' ? '' : '[existing value] ') . $append, 'Extra Parameters can grant any Docker right');
-    }
-}
-
-// Variables
-$variables = requireMap($proposal['variables'] ?? [], 'variables');
-requireKeys($variables, ['set', 'remove'], 'variables');
-
-foreach (requireMap($variables['set'] ?? [], 'variables.set') as $key => $value) {
-    $key = requireText($key, 'variable name', 200);
-
-    if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $key)) {
-        fail('Bad variable name');
-    }
-
-    $value = requireText($value, "variable $key");
-    $warning = preg_match('/^(LD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|PATH$|DOCKER_|SUDO_|BASH_ENV$|ENV$)/', $key) ? 'this variable can change what code runs' : null;
-    $node = findConfig($doc, 'Variable', $key);
-
-    if ($node) {
-        if ($node->textContent === $value) {
-            continue;
-        }
-
-        $old = $node->textContent;
-        $node->textContent = $value;
-        $note("Variable $key", hidden($old), $value, $warning);
-    } else {
-        addConfig($doc, 'Variable', $key, $value, '');
-        $note("Variable $key (new)", '(none)', $value, $warning);
-    }
-}
-
-foreach (requireList($variables['remove'] ?? [], 'variables.remove') as $key) {
-    $key = requireText($key, 'variable name', 200);
-    $node = findConfig($doc, 'Variable', $key);
-
-    if ($node) {
-        $old = $node->textContent;
-        $node->parentNode->removeChild($node);
-        $note("Variable $key removed", hidden($old), '(none)');
-    }
-}
-
-// Paths
-$paths = requireMap($proposal['paths'] ?? [], 'paths');
-requireKeys($paths, ['set', 'remove'], 'paths');
-
-foreach (requireList($paths['set'] ?? [], 'paths.set') as $entry) {
-    $entry = requireMap($entry, 'path');
-    requireKeys($entry, ['container', 'host', 'mode'], 'path');
-    $target = containerPath($entry['container'] ?? null, 'path container');
-    $host = containerPath($entry['host'] ?? null, 'path host');
-    $mode = requireText($entry['mode'] ?? 'rw', 'path mode', 20);
-
-    if (!in_array($mode, PATH_MODES, true)) {
-        fail('Bad path mode');
-    }
-
-    $warning = hostPathWarning($host);
-    $node = findConfig($doc, 'Path', $target);
-
-    if ($node) {
-        if ($node->textContent === $host && $node->getAttribute('Mode') === $mode) {
-            continue;
-        }
-
-        $from = $node->textContent . ' (' . $node->getAttribute('Mode') . ')';
-        $node->textContent = $host;
-        $node->setAttribute('Mode', $mode);
-        $note("Path $target", $from, "$host ($mode)", $warning);
-    } else {
-        addConfig($doc, 'Path', $target, $host, $mode);
-        $note("Path $target (new)", '(none)', "$host ($mode)", $warning);
-    }
-}
-
-foreach (requireList($paths['remove'] ?? [], 'paths.remove') as $target) {
-    $target = containerPath($target, 'path container');
-    $node = findConfig($doc, 'Path', $target);
-
-    if ($node) {
-        $from = $node->textContent;
-        $node->parentNode->removeChild($node);
-        $note("Path $target removed", $from, '(none)');
-    }
-}
-
-// Ports
-$ports = requireMap($proposal['ports'] ?? [], 'ports');
-requireKeys($ports, ['set', 'remove'], 'ports');
-
-foreach (requireList($ports['set'] ?? [], 'ports.set') as $entry) {
-    $entry = requireMap($entry, 'port');
-    requireKeys($entry, ['container', 'host', 'protocol'], 'port');
-    $target = portNumber($entry['container'] ?? null, 'port container');
-    $host = portNumber($entry['host'] ?? null, 'port host');
-    $protocol = requireText($entry['protocol'] ?? 'tcp', 'port protocol', 5);
-
-    if (!in_array($protocol, PROTOCOLS, true)) {
-        fail('Bad port protocol');
-    }
-
-    $node = findConfig($doc, 'Port', $target);
-
-    if ($node) {
-        if ($node->textContent === $host && $node->getAttribute('Mode') === $protocol) {
-            continue;
-        }
-
-        $from = $node->textContent . '/' . $node->getAttribute('Mode');
-        $node->textContent = $host;
-        $node->setAttribute('Mode', $protocol);
-        $note("Port $target", $from, "$host/$protocol", 'publishes the container on the network');
-    } else {
-        addConfig($doc, 'Port', $target, $host, $protocol);
-        $note("Port $target (new)", '(none)', "$host/$protocol", 'publishes the container on the network');
-    }
-}
-
-foreach (requireList($ports['remove'] ?? [], 'ports.remove') as $target) {
-    $target = portNumber($target, 'port container');
-    $node = findConfig($doc, 'Port', $target);
-
-    if ($node) {
-        $from = $node->textContent;
-        $node->parentNode->removeChild($node);
-        $note("Port $target removed", $from, '(none)');
-    }
-}
-
-if (!$changes) {
-    echo "Nothing to change: " . clean($template) . " already matches this proposal.\n";
+if (!$work) {
+    echo "Nothing to change: the templates already match this proposal.\n";
     exit(0);
 }
 
-$dangerous = array_filter($changes, fn ($c) => $c['warning'] !== null);
-
-echo "\nTemplate: " . clean($template) . "\n";
-
-if ($summary !== '') {
-    echo "The agent's own description, not verified: " . clean($summary) . "\n";
+if ($overall !== '') {
+    echo "\nThe agent's own description of this batch, not verified: " . clean($overall) . "\n";
 }
 
-echo "\nWhat would actually change:\n";
+$dangerous = false;
 
-foreach ($changes as $c) {
-    echo ($c['warning'] ? '  [!] ' : '      ') . clean($c['what']) . "\n";
-    echo '        from: ' . clean($c['from']) . "\n";
-    echo '        to:   ' . clean($c['to']) . "\n";
+foreach ($work as $b) {
+    echo "\nTemplate: " . clean($b['template']) . "\n";
 
-    if ($c['warning']) {
-        echo '        WARNING: ' . clean($c['warning']) . "\n";
+    if ($b['summary'] !== '') {
+        echo "The agent's own description, not verified: " . clean($b['summary']) . "\n";
+    }
+
+    echo "\nWhat would actually change:\n";
+
+    foreach ($b['changes'] as $c) {
+        $dangerous = $dangerous || $c['warning'] !== null;
+        echo ($c['warning'] ? '  [!] ' : '      ') . clean($c['what']) . "\n";
+        echo '        from: ' . clean($c['from']) . "\n";
+        echo '        to:   ' . clean($c['to']) . "\n";
+
+        if ($c['warning']) {
+            echo '        WARNING: ' . clean($c['warning']) . "\n";
+        }
     }
 }
 
@@ -456,7 +521,7 @@ if (!stream_isatty(STDIN)) {
     fail('This must be confirmed by a person at a terminal; nothing was changed');
 }
 
-echo "Type \"$phrase\" to write this, anything else to stop: ";
+echo "Type \"$phrase\" to write " . (count($work) > 1 ? 'these ' . count($work) . ' templates' : 'this') . ", anything else to stop: ";
 $answer = rtrim((string) fgets(STDIN), "\r\n");
 
 if ($answer !== $phrase) {
@@ -464,34 +529,50 @@ if ($answer !== $phrase) {
     exit(1);
 }
 
-if (file_get_contents($templateFile) !== $before) {
-    fail('The template changed while waiting; nothing was changed');
-}
-
-$after = $doc->saveXML();
-$check = new DOMDocument();
-
-if (!@$check->loadXML($after, LIBXML_NONET)) {
-    fail('The result is not valid XML; nothing was changed');
-}
-
+// Everything is prepared and checked first, so a problem leaves every template as it was.
 if (!is_dir($backupDir) && !mkdir($backupDir, 0700, true)) {
     fail('Could not create the backup folder; nothing was changed');
 }
 
-$backup = $backupDir . '/' . $template . '.' . date('Ymd-His');
+$stamp = date('Ymd-His');
 
-if (!copy($templateFile, $backup)) {
-    fail('Could not write the backup; nothing was changed');
+foreach ($work as $key => $b) {
+    if (file_get_contents($b['file']) !== $b['before']) {
+        fail('A template changed while waiting; nothing was changed: ' . $b['template']);
+    }
+
+    $after = $b['doc']->saveXML();
+    $check = new DOMDocument();
+
+    if (!@$check->loadXML($after, LIBXML_NONET)) {
+        fail('A result is not valid XML; nothing was changed: ' . $b['template']);
+    }
+
+    $work[$key]['backup'] = "$backupDir/{$b['template']}.$stamp";
+    $work[$key]['temp'] = "{$b['file']}.flash-apply-tmp";
+
+    if (!copy($b['file'], $work[$key]['backup']) || file_put_contents($work[$key]['temp'], $after) === false) {
+        foreach ($work as $w) {
+            if (isset($w['temp'])) {
+                @unlink($w['temp']);
+            }
+        }
+
+        fail('Could not write a backup or a new copy; nothing was changed: ' . $b['template']);
+    }
 }
 
-$temp = "$templateFile.flash-apply-tmp";
+echo "\n";
+$written = [];
 
-if (file_put_contents($temp, $after) === false || !rename($temp, $templateFile)) {
-    @unlink($temp);
-    fail('Could not write the template; it is unchanged or see the backup');
+foreach ($work as $b) {
+    if (!rename($b['temp'], $b['file'])) {
+        fail('Could not replace ' . $b['template'] . '. Already written: ' . (implode(', ', $written) ?: 'none') . '. Backups end in ' . $stamp);
+    }
+
+    $written[] = $b['template'];
+    echo "Written: " . clean($b['template']) . "  (backup: " . clean($b['backup']) . ")\n";
 }
 
 @rename($proposalFile, "$proposalFile.applied");
-echo "\nWritten. Backup: " . clean($backup) . "\n";
-echo "Nothing is running differently yet: open the container in the Docker tab, check it, and press Apply.\n";
+echo "Nothing is running differently yet: rebuild each container from the Docker tab (open it, check it, press Apply).\n";

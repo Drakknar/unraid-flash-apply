@@ -13,7 +13,7 @@ php /boot/config/flash-apply.php              # lists waiting proposals
 php /boot/config/flash-apply.php proposal.json
 ```
 
-It shows what would change, computed from the template before and after, with existing values hidden. Risky changes are marked and need `apply dangerous` instead of `apply`. A backup goes to `/boot/config/flash-apply-backups/` (it contains secrets). The change takes effect when you press Apply in the Docker tab.
+It shows what would change, computed from the template before and after, with existing values hidden. Risky changes are marked and need `apply dangerous` instead of `apply`. A backup goes to `/boot/config/flash-apply-backups/` (it contains secrets). Changes take effect when you rebuild each container from the Docker tab.
 
 Proposals are read from `/mnt/cache/appdata/code-server/flash-proposals`; set `FLASH_APPLY_PROPOSALS` to change that.
 
@@ -36,6 +36,20 @@ It refuses to run on any unRAID release other than the one in `TESTED_RELEASE` (
 ```
 
 `set` accepts `Repository`, `Network`, `Privileged`, `ExtraParams`, `PostArgs` and `WebUI`. `ExtraParams` can only be set while it is empty, because the old value stays hidden; `append_extra_params` adds to the end and keeps what is there. Everything else is refused, including unknown fields, control characters, link files and names with a path.
+
+`replace_in_variables` changes part of a value that holds a secret, such as the host in a database URL, without showing or touching the rest:
+
+```json
+{ "replace_in_variables": { "DATABASE_URL": { "from": "192.168.1.4:5432", "to": "172.17.0.1:5432" } } }
+```
+
+## Batches
+
+A file can hold several proposals, shown together and confirmed once. It's all or nothing: any invalid entry refuses the whole batch, and every backup and new copy is prepared before the first template is replaced.
+
+```json
+{ "summary": "Why", "changes": [ { "template": "my-a.xml", "...": "..." }, { "template": "my-b.xml", "...": "..." } ] }
+```
 
 ## What it doesn't protect against
 

@@ -47,7 +47,7 @@ unchanged() { if grep -qF -- 'old/image:1' "$tpl/my-app.xml" && ! grep -qF -- 'N
 # --- an ordinary change
 reset_template
 run p1 '{"template":"my-app.xml","summary":"test","variables":{"set":{"TOKEN":"new-token","NEWVAR":"v"},"remove":["GONE"]},"paths":{"remove":["/app"]}}' apply
-expect "applied" "Written."
+expect "applied" "Written:"
 never "existing secret is never printed" "$SECRET"
 expect "summary marked unverified" "not verified"
 file_has "variable changed" ">new-token<"
@@ -124,16 +124,54 @@ run e1 '{"template":"my-app.xml","set":{"ExtraParams":"-p 1:2"}}' "apply dangero
 expect "won't replace an existing value" "already has a value"
 file_has "existing value kept after refusal" "--secret-param=$SECRET"
 run e2 '{"template":"my-app.xml","append_extra_params":"-p 172.17.0.1:1:2"}' "apply dangerous"
-expect "append applied" "Written."
+expect "append applied" "Written:"
 never "append doesn't print the old value" "$SECRET"
 file_has "append keeps the old value" "--secret-param=$SECRET -p 172.17.0.1:1:2"
 run e3 '{"template":"my-app.xml","append_extra_params":"-p 172.17.0.1:1:2"}' "apply dangerous"
-expect "second append changes nothing" "already matches"
+expect "second append changes nothing" "already match"
 sed -i "s#<ExtraParams>.*</ExtraParams>#<ExtraParams></ExtraParams>#" "$tpl/my-app.xml"
 run e4 '{"template":"my-app.xml","set":{"ExtraParams":"-p 3:4"}}' "apply dangerous"
 file_has "set works on an empty value" ">-p 3:4<"
 run e5 '{"template":"my-app.xml","append_extra_params":"x\u001b[2J"}' stop
 expect "append refuses control characters" "control characters"
+
+# --- part of a secret value
+reset_template
+printf '%s' "$(sed 's#</Container>#<Config Name="Db" Target="DATABASE_URL" Default="" Mode="" Description="" Type="Variable" Display="always" Required="false" Mask="false">postgres://u:'$SECRET'@192.168.1.4:64232/db</Config></Container>#' "$tpl/my-app.xml")" > "$tpl/my-app.xml"
+run p1 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"192.168.1.4:64232","to":"172.17.0.1:64232"}}}' apply
+expect "replace applied" "Written:"
+never "replace doesn't print the rest" "$SECRET"
+file_has "replace changed the host" "$SECRET@172.17.0.1:64232/db"
+run p2 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"192.168.1.4:64232","to":"172.17.0.1:64232"}}}' apply
+expect "replace is safe to repeat" "already match"
+run p3 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"nothing-here","to":"x"}}}' apply
+expect "replace refuses when nothing matches" "neither the old nor the new"
+run p4 '{"template":"my-app.xml","replace_in_variables":{"MISSING":{"from":"a","to":"b"}}}' apply
+expect "replace refuses a missing variable" "has no variable"
+
+# --- batches
+reset_template
+sed 's/old\/image:1/second\/image:1/' "$tpl/my-app.xml" > "$tpl/my-two.xml"
+run b1 '{"summary":"both","changes":[{"template":"my-app.xml","variables":{"set":{"NEWVAR":"1"}}},{"template":"my-two.xml","variables":{"set":{"NEWVAR2":"2"}}}]}' apply
+expect "batch asks once for both" "these 2 templates"
+expect "batch lists the first" "Written: my-app.xml"
+expect "batch lists the second" "Written: my-two.xml"
+never "batch hides secrets" "$SECRET"
+if grep -q NEWVAR2 "$tpl/my-two.xml" && grep -q NEWVAR "$tpl/my-app.xml"; then ok "batch wrote both"; else bad "batch wrote both"; fi
+if [ "$(ls "$root/boot/config/flash-apply-backups" | wc -l)" = 2 ]; then ok "batch backed up both"; else bad "batch backed up both"; fi
+reset_template
+sed 's/old\/image:1/second\/image:1/' "$tpl/my-app.xml" > "$tpl/my-two.xml"
+run b2 '{"changes":[{"template":"my-app.xml","variables":{"set":{"NEWVAR":"1"}}},{"template":"my-missing.xml"}]}' apply
+expect "batch refused on one bad entry" "not found"
+unchanged "a refused batch writes nothing"
+run b3 '{"changes":[{"template":"my-app.xml","variables":{"set":{"NEWVAR":"1"}}},{"template":"my-two.xml","set":{"Privileged":"true"}}]}' apply
+expect "one risky change makes the batch risky" "apply dangerous"
+unchanged "plain apply doesn't confirm a risky batch"
+run b4 '{"changes":[{"template":"my-app.xml"},{"template":"my-app.xml"}]}' apply
+expect "batch refuses a repeated template" "appears twice"
+run b5 '{"changes":[{"template":"my-app.xml","variables":{"set":{"NEWVAR":"1"}}}],"surprise":1}' apply
+expect "batch refuses unknown fields" "unknown fields"
+rm -f "$tpl/my-two.xml"
 
 # --- unRAID version gate
 reset_template
@@ -148,7 +186,7 @@ run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
 expect "missing version file refused" "Could not read"
 echo 'version="7.3.9"' > "$root/etc/unraid-version"
 run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
-expect "same release, newer patch, is allowed" "Written."
+expect "same release, newer patch, is allowed" "Written:"
 
 rm -rf "$root"
 [ "$fails" = 0 ] && echo "All tests passed" || { echo "$fails failed"; exit 1; }
