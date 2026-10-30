@@ -1,0 +1,24 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Secret scan
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 detect --source /repo --redact --no-banner
+
+      - name: Tests
+        run: docker run --rm -v "$PWD:/w" -w /w php:8.3-cli sh -c "php -l flash-apply.php && apt-get -qq update >/dev/null && apt-get -qq install -y libonig-dev >/dev/null && docker-php-ext-install mbstring >/dev/null 2>&1; sh tests/run.sh"
