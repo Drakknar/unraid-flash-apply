@@ -168,23 +168,27 @@ cat > "$tpl/my-rt.xml" <<'X'
 X
 cat > "$root/rt.php" <<'X'
 <?php
+// Every value and attribute, without the variable the test adds.
 $d = new DOMDocument(); $d->load($argv[1]); $o = [];
-foreach ($d->getElementsByTagName('Config') as $c) { $a = []; foreach ($c->attributes as $n) { $a[$n->name] = $n->value; } $o[] = [$a, $c->textContent]; }
+foreach ($d->getElementsByTagName('Config') as $c) {
+    if ($c->getAttribute('Target') === 'NEWVAR') { continue; }
+    $a = []; foreach ($c->attributes as $n) { $a[$n->name] = $n->value; }
+    $o[] = [$a, $c->textContent];
+}
 foreach (['Name', 'Repository', 'ExtraParams', 'Overview'] as $f) { $o[$f] = $d->getElementsByTagName($f)->item(0)->textContent; }
-echo json_encode($o, JSON_UNESCAPED_UNICODE);
+echo json_encode($o, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 X
 before=$(php "$root/rt.php" "$tpl/my-rt.xml")
 run rt1 '{"template":"my-rt.xml","variables":{"set":{"NEWVAR":"1"}}}' apply
 expect "round trip applied" "Written:"
-after=$(php "$root/rt.php" "$tpl/my-rt.xml" | sed 's/,\[{"Name":"NEWVAR".*\]\]*,"Name"/,"Name"/')
-want=$(printf '%s' "$before" | sed 's/\],"Name"/],"Name"/')
-out="before=$before
-after =$(php "$root/rt.php" "$tpl/my-rt.xml")"
-for s in 'p&w<d%24$x' 'a=1&b=2' '"k":"a&b"' '"n":"<x>"' 'ü' '  spaced  ' 'fallback' 'Café <b>bold</b> & more' '--b=\"x y\"' 'd&e' 'say \"hi\"'; do
-  if php "$root/rt.php" "$tpl/my-rt.xml" | grep -qF -- "$s"; then ok "survives: $s"; else bad "survives: $s"; fi
-done
+after=$(php "$root/rt.php" "$tpl/my-rt.xml")
+if [ "$before" = "$after" ]; then ok "every other value and attribute is unchanged"; else out="$before
+$after"; bad "every other value and attribute is unchanged"; fi
 run rt2 '{"template":"my-rt.xml","replace_in_variables":{"URL":{"from":"192.168.1.4:5","to":"172.17.0.1:5"}}}' apply
-if php "$root/rt.php" "$tpl/my-rt.xml" | grep -qF "postgres://u:p&w<d%24\$x'\\\"é@172.17.0.1:5/db?a=1&b=2"; then ok "replace keeps special characters"; else out=$(php "$root/rt.php" "$tpl/my-rt.xml"); bad "replace keeps special characters"; fi
+want=$(printf '%s' "$before" | sed 's/192\.168\.1\.4:5/172.17.0.1:5/')
+after=$(php "$root/rt.php" "$tpl/my-rt.xml")
+if [ "$want" = "$after" ]; then ok "replace changes only the host"; else out="$want
+$after"; bad "replace changes only the host"; fi
 
 # --- moving a port
 run mv1 '{"template":"my-rt.xml","append_extra_params":"-p 172.17.0.1:53:53","ports":{"remove":[9999]}}' "apply dangerous"
