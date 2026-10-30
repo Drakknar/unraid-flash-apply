@@ -144,7 +144,7 @@ never "replace doesn't print the rest" "$SECRET"
 file_has "replace changed the host" "$SECRET@172.17.0.1:64232/db"
 run p2 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"192.168.1.4:64232","to":"172.17.0.1:64232"}}}' apply
 expect "replace is safe to repeat" "already match"
-run p3 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"nothing-here","to":"x"}}}' apply
+run p3 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"nothing-here","to":"unmatched-new-text"}}}' apply
 expect "replace refuses when nothing matches" "neither the old nor the new"
 run p4 '{"template":"my-app.xml","replace_in_variables":{"MISSING":{"from":"a","to":"b"}}}' apply
 expect "replace refuses a missing variable" "has no variable"
