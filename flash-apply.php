@@ -10,9 +10,9 @@ const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostA
 const PROPOSAL_KEYS = ['template', 'summary', 'set', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
-// The unRAID major version this script was tested on. A new major version may store templates differently, so it
-// stops until someone has checked and released a version with this number raised. There is deliberately no override.
-const TESTED_MAJOR = 7;
+// The unRAID release this script was tested on; any 7.3.x counts. Another release may store templates differently, so
+// it stops until someone has checked and released a version with this number changed. There is deliberately no override.
+const TESTED_RELEASE = '7.3';
 
 $root = getenv('FLASH_APPLY_ROOT') ?: '';
 $templatesDir = $root . '/boot/config/plugins/dockerMan/templates-user';
@@ -173,12 +173,12 @@ if (!class_exists('DOMDocument') || !function_exists('mb_check_encoding')) {
 $versionFile = $root . '/etc/unraid-version';
 $versionText = is_file($versionFile) ? (string) file_get_contents($versionFile) : '';
 
-if (!preg_match('/version="(\d+)\.[^"]*"/', $versionText, $version)) {
+if (!preg_match('/version="(\d+\.\d+)(?:[.-][^"]*)?"/', $versionText, $version)) {
     fail('Could not read the unRAID version; nothing was changed');
 }
 
-if ((int) $version[1] !== TESTED_MAJOR) {
-    fail("Tested on unRAID " . TESTED_MAJOR . ".x, this is {$version[1]}.x; validate templates on it and install a release that allows it");
+if ($version[1] !== TESTED_RELEASE) {
+    fail("Tested on unRAID " . TESTED_RELEASE . ".x, this is {$version[1]}.x; validate templates on it and install a release that allows it");
 }
 
 $name = $argv[1] ?? '';

@@ -19,7 +19,7 @@ Proposals are read from `/mnt/cache/appdata/code-server/flash-proposals`; set `F
 
 ## unRAID versions
 
-It refuses to run on any unRAID major version other than the one in `TESTED_MAJOR`. There is no override: after checking templates on a new major version, raise the number, release, and reinstall.
+It refuses to run on any unRAID release other than the one in `TESTED_RELEASE` (`7.3` allows any 7.3.x). There is no override: after checking templates on a new release, change the number, release, and reinstall.
 
 ## Proposal format
 

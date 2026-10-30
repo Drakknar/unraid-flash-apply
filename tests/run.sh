@@ -120,7 +120,7 @@ expect "refuses a linked proposal" "is a link"
 
 # --- unRAID version gate
 reset_template
-for v in 'version="8.0.0"' 'version="6.12.1"' 'nonsense'; do
+for v in 'version="8.0.0"' 'version="7.4.0"' 'version="7.4.0-rc.1"' 'version="7.2.9"' 'version="7.30.0"' 'version="6.12.1"' 'nonsense'; do
   echo "$v" > "$root/etc/unraid-version"
   run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
   expect "version gate refuses: $v" "Refused"
@@ -129,9 +129,9 @@ done
 rm "$root/etc/unraid-version"
 run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
 expect "missing version file refused" "Could not read"
-echo 'version="7.9.0"' > "$root/etc/unraid-version"
+echo 'version="7.3.9"' > "$root/etc/unraid-version"
 run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
-expect "same major is allowed" "Written."
+expect "same release, newer patch, is allowed" "Written."
 
 rm -rf "$root"
 [ "$fails" = 0 ] && echo "All tests passed" || { echo "$fails failed"; exit 1; }
