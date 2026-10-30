@@ -203,6 +203,7 @@ if (!is_array($proposal)) {
 
 requireKeys($proposal, PROPOSAL_KEYS, 'Proposal');
 $template = requireText($proposal['template'] ?? null, 'template', 200);
+$summary = requireText($proposal['summary'] ?? '', 'summary', 500);
 
 if (!preg_match('/^my-[A-Za-z0-9][A-Za-z0-9._-]*\.xml$/', $template)) {
     fail('template must be a my-*.xml file name');
@@ -391,7 +392,6 @@ if (!$changes) {
     exit(0);
 }
 
-$summary = requireText($proposal['summary'] ?? '', 'summary', 500);
 $dangerous = array_filter($changes, fn ($c) => $c['warning'] !== null);
 
 echo "\nTemplate: " . clean($template) . "\n";
