@@ -35,6 +35,8 @@ It refuses to run on any unRAID release other than the one in `TESTED_RELEASE` (
 }
 ```
 
+`remove_extra_params` takes one port binding out of Extra Parameters, such as `-p 172.17.0.1:64000:8080`. It accepts nothing else, because the rest of the value is hidden from the proposal's author.
+
 `set` accepts `Repository`, `Network`, `Privileged`, `ExtraParams`, `PostArgs` and `WebUI`. `ExtraParams` can only be set while it is empty, because the old value stays hidden; `append_extra_params` adds to the end and keeps what is there. Everything else is refused, including unknown fields, control characters, link files and names with a path.
 
 `replace_in_variables` changes part of a value that holds a secret, such as the host in a database URL, without showing or touching the rest:

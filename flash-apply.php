@@ -7,7 +7,7 @@
 
 const MAX_PROPOSAL_BYTES = 262144;
 const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostArgs', 'WebUI'];
-const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'replace_in_variables', 'variables', 'paths', 'ports'];
+const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'remove_extra_params', 'replace_in_variables', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
 // The unRAID release this script was tested on; any 7.3.x counts. Another release may store templates differently, so
@@ -233,6 +233,25 @@ function buildChange(array $proposal): array
         };
         $shownOld = in_array($field, ['ExtraParams', 'PostArgs'], true) ? hidden($old) : $old;
         $note($field, $shownOld, $value, $warning);
+    }
+
+    // A port binding taken out of Extra Parameters. Only this exact shape: the rest of the value stays hidden from the
+    // proposal's author, so nothing else in it can be removed blind. Already gone is fine, so a finished move can repeat.
+    $remove = trim(requireText($proposal['remove_extra_params'] ?? '', 'remove_extra_params'));
+
+    if ($remove !== '') {
+        if (!preg_match('/^-p (\d{1,3}(\.\d{1,3}){3}:)?\d{1,5}:\d{1,5}(\/(tcp|udp))?$/', $remove)) {
+            fail('remove_extra_params only takes one port binding, like -p 172.17.0.1:64000:8080');
+        }
+
+        $node = $doc->documentElement->getElementsByTagName('ExtraParams')->item(0);
+        $old = $node ? trim($node->textContent) : '';
+        $new = trim(preg_replace('/\s+/', ' ', preg_replace('/(^|\s)' . preg_quote($remove, '/') . '(?=\s|$)/', ' ', $old)));
+
+        if ($node && preg_match('/(^|\s)' . preg_quote($remove, '/') . '(\s|$)/', $old)) {
+            $node->textContent = $new;
+            $note('ExtraParams (one binding removed)', $remove, $new === '' ? '(empty)' : '[rest kept, hidden]');
+        }
     }
 
     // Added to Extra Parameters, keeping what is there
