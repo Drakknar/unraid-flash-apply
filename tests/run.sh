@@ -46,7 +46,7 @@ unchanged() { if grep -qF -- 'old/image:1' "$tpl/my-app.xml" && ! grep -qF -- 'N
 
 # --- an ordinary change
 reset_template
-run p1 '{"template":"my-app.xml","summary":"test","variables":{"set":{"TOKEN":"new-token","NEWVAR":"v"},"remove":["GONE"]},"paths":{"remove":["/app"]}}' apply
+run p1 '{"template":"my-app.xml","summary":"test","variables":{"set":{"TOKEN":"new-token","NEWVAR":"v"},"remove":["GONE"]},"paths":{"remove":["/app"]}}' "apply dangerous"
 expect "applied" "Written:"
 never "existing secret is never printed" "$SECRET"
 expect "summary marked unverified" "not verified"
@@ -86,11 +86,33 @@ for case in \
   '{"template":"my-app.xml","paths":{"set":[{"container":"/b","host":"/boot","mode":"ro"}]}}|host system folder' \
   '{"template":"my-app.xml","paths":{"set":[{"container":"/m","host":"/mnt/user","mode":"rw"}]}}|whole disk or share' \
   '{"template":"my-app.xml","variables":{"set":{"LD_PRELOAD":"/x.so"}}}|can change what code runs' \
+  '{"template":"my-app.xml","paths":{"set":[{"container":"/b","host":"//boot","mode":"ro"}]}}|host system folder' \
+  '{"template":"my-app.xml","paths":{"set":[{"container":"/b","host":"/./boot","mode":"ro"}]}}|host system folder' \
+  '{"template":"my-app.xml","paths":{"set":[{"container":"/b","host":"/.","mode":"ro"}]}}|host system folder' \
+  '{"template":"my-app.xml","paths":{"set":[{"container":"/s","host":"//var/run/docker.sock/.","mode":"rw"}]}}|control of Docker' \
+  '{"template":"my-app.xml","paths":{"set":[{"container":"/a","host":"/mnt/user/appdata","mode":"rw"}]}}|every container' \
+  '{"template":"my-app.xml","paths":{"set":[{"container":"/custom-cont-init.d","host":"/mnt/user/appdata/x","mode":"rw"}]}}|mounts over code' \
+  '{"template":"my-app.xml","paths":{"set":[{"container":"/app","host":"/mnt/user/appdata/x","mode":"rw"}]}}|mounts over code' \
+  '{"template":"my-app.xml","paths":{"remove":["/app"]}}|removing a mount' \
+  '{"template":"my-app.xml","variables":{"remove":["KEEP"]}}|removing a variable' \
+  '{"template":"my-app.xml","variables":{"set":{"INSTALL_PACKAGES":"x"}}}|can change what code runs' \
+  '{"template":"my-app.xml","variables":{"set":{"JAVA_TOOL_OPTIONS":"x"}}}|can change what code runs' \
+  '{"template":"my-app.xml","variables":{"set":{"FILE__TOKEN":"x"}}}|can change what code runs' \
+  '{"template":"my-app.xml","variables":{"set":{"S6_X":"x"}}}|can change what code runs' \
+  '{"template":"my-app.xml","variables":{"set":{"NEW_URL":"https://example.invalid/x"}}}|an address' \
+  '{"template":"my-app.xml","variables":{"set":{"NEW_HOST":"example.invalid:8080"}}}|an address' \
+  '{"template":"my-app.xml","replace_in_variables":{"KEEP":{"from":"kept","to":"other"}}}|rest of the value is hidden' \
   '{"template":"my-app.xml","ports":{"set":[{"container":80,"host":8081,"protocol":"tcp"}]}}|publishes the container'; do
   run w "${case%|*}" stop
   expect "warns: ${case#*|}" "${case#*|}"
   never "old ExtraParams value hidden" "$SECRET"
 done
+
+# --- an ordinary folder and value stay plain
+reset_template
+run plain '{"template":"my-app.xml","paths":{"set":[{"container":"/data","host":"/mnt/user/appdata/app/data","mode":"rw"}]},"variables":{"set":{"NEWVAR":"plain"}}}' stop
+never "no warning for an ordinary path and value" "WARNING"
+reset_template
 
 # --- refused proposals
 reset_template
@@ -138,7 +160,7 @@ expect "append refuses control characters" "control characters"
 # --- part of a secret value
 reset_template
 printf '%s' "$(sed 's#</Container>#<Config Name="Db" Target="DATABASE_URL" Default="" Mode="" Description="" Type="Variable" Display="always" Required="false" Mask="false">postgres://u:'$SECRET'@192.168.1.4:64232/db</Config></Container>#' "$tpl/my-app.xml")" > "$tpl/my-app.xml"
-run p1 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"192.168.1.4:64232","to":"172.17.0.1:64232"}}}' apply
+run p1 '{"template":"my-app.xml","replace_in_variables":{"DATABASE_URL":{"from":"192.168.1.4:64232","to":"172.17.0.1:64232"}}}' "apply dangerous"
 expect "replace applied" "Written:"
 never "replace doesn't print the rest" "$SECRET"
 file_has "replace changed the host" "$SECRET@172.17.0.1:64232/db"
@@ -184,7 +206,7 @@ expect "round trip applied" "Written:"
 after=$(php "$root/rt.php" "$tpl/my-rt.xml")
 if [ "$before" = "$after" ]; then ok "every other value and attribute is unchanged"; else out="$before
 $after"; bad "every other value and attribute is unchanged"; fi
-run rt2 '{"template":"my-rt.xml","replace_in_variables":{"URL":{"from":"192.168.1.4:5","to":"172.17.0.1:5"}}}' apply
+run rt2 '{"template":"my-rt.xml","replace_in_variables":{"URL":{"from":"192.168.1.4:5","to":"172.17.0.1:5"}}}' "apply dangerous"
 want=$(printf '%s' "$before" | sed 's/192\.168\.1\.4:5/172.17.0.1:5/')
 after=$(php "$root/rt.php" "$tpl/my-rt.xml")
 if [ "$want" = "$after" ]; then ok "replace changes only the host"; else out="$want

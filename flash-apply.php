@@ -100,9 +100,15 @@ function portNumber(mixed $value, string $what): string
     return $port;
 }
 
+// The path Docker ends up with: //boot, /./boot and /boot/. all mean /boot. ".." is refused before this.
+function normalPath(string $path): string
+{
+    return '/' . implode('/', array_filter(explode('/', $path), fn ($part) => $part !== '' && $part !== '.'));
+}
+
 function hostPathWarning(string $host): ?string
 {
-    $normal = rtrim($host, '/') ?: '/';
+    $normal = normalPath($host);
 
     if (preg_match('#(^|/)docker\.sock$#', $normal)) {
         return 'gives control of Docker, equal to root on the host';
@@ -114,6 +120,38 @@ function hostPathWarning(string $host): ?string
 
     if (preg_match('#^/mnt(/(user|user0|cache|disk[0-9]+|[^/]+))?$#', $normal)) {
         return 'a whole disk or share';
+    }
+
+    if (preg_match('#^/mnt/[^/]+/(appdata|system)$#', $normal)) {
+        return "every container's data, with their secrets";
+    }
+
+    return null;
+}
+
+// Whatever is mounted on these runs inside the container, usually as root at start-up.
+function containerPathWarning(string $target): ?string
+{
+    if (preg_match('#^/(custom-cont-init\.d|custom-services\.d|app|init|etc|usr|bin|sbin|lib|lib64|root|docker-entrypoint[^/]*|entrypoint[^/]*)(/|$)#', normalPath($target)) || normalPath($target) === '/') {
+        return 'mounts over code or start-up scripts: whoever can write the host folder runs code in the container';
+    }
+
+    return null;
+}
+
+function pathWarnings(string $host, string $target): ?string
+{
+    return implode('; ', array_filter([hostPathWarning($host), containerPathWarning($target)])) ?: null;
+}
+
+function variableWarning(string $key, string $value): ?string
+{
+    if (preg_match('/^(LD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|PATH$|DOCKER_|SUDO_|BASH_ENV$|ENV$|INSTALL_PACKAGES$|INSTALL_PIP_PACKAGES$|JAVA_TOOL_OPTIONS$|_JAVA_OPTIONS$|JDK_JAVA_OPTIONS$|FILE__|S6_)/', $key)) {
+        return 'this variable can change what code runs';
+    }
+
+    if (preg_match('#^[a-z][a-z0-9+.-]*://#i', $value) || preg_match('#^[a-z0-9.-]+:\d{1,5}(/|$)#i', $value)) {
+        return 'an address: it can send this container\'s traffic and credentials elsewhere';
     }
 
     return null;
@@ -286,7 +324,7 @@ function buildChange(array $proposal): array
         }
 
         $value = requireText($value, "variable $key");
-        $warning = preg_match('/^(LD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|PATH$|DOCKER_|SUDO_|BASH_ENV$|ENV$)/', $key) ? 'this variable can change what code runs' : null;
+        $warning = variableWarning($key, $value);
         $node = findConfig($doc, 'Variable', $key);
 
         if ($node) {
@@ -310,7 +348,7 @@ function buildChange(array $proposal): array
         if ($node) {
             $old = $node->textContent;
             $node->parentNode->removeChild($node);
-            $note("Variable $key removed", hidden($old), '(none)');
+            $note("Variable $key removed", hidden($old), '(none)', 'removing a variable can turn off a login or another protection');
         }
     }
 
@@ -340,7 +378,7 @@ function buildChange(array $proposal): array
 
         if (str_contains($node->textContent, $from)) {
             $node->textContent = str_replace($from, $to, $node->textContent);
-            $note("Variable $key (part of the value)", "[hidden] ... $from ... [hidden]", "[hidden] ... $to ... [hidden]");
+            $note("Variable $key (part of the value)", "[hidden] ... $from ... [hidden]", "[hidden] ... $to ... [hidden]", 'the rest of the value is hidden: this can send its credentials elsewhere');
         } elseif (!str_contains($node->textContent, $to)) {
             fail("Variable $key in $template contains neither the old nor the new text");
         }
@@ -361,7 +399,7 @@ function buildChange(array $proposal): array
             fail('Bad path mode');
         }
 
-        $warning = hostPathWarning($host);
+        $warning = pathWarnings($host, $target);
         $node = findConfig($doc, 'Path', $target);
 
         if ($node) {
@@ -386,7 +424,7 @@ function buildChange(array $proposal): array
         if ($node) {
             $from = $node->textContent;
             $node->parentNode->removeChild($node);
-            $note("Path $target removed", $from, '(none)');
+            $note("Path $target removed", $from, '(none)', 'removing a mount can expose what it covered, or send data into the container and lose it');
         }
     }
 

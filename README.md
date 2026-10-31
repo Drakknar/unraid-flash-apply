@@ -55,6 +55,8 @@ A file can hold several proposals, shown together and confirmed once. It's all o
 
 ## What it doesn't protect against
 
+Warnings ask for the longer `apply dangerous`. Besides system folders and risky settings they now cover paths written another way (`//boot`, `/./boot`), `appdata`, mounts onto code folders such as `/app`, address values, partial replaces inside a value, and removed paths or variables.
+
 The warnings cover the common ways to gain root, but you are the check: read the diff. A new image in `Repository` can do anything its container's mounts allow. Variable values in a proposal are shown in clear, so don't put secrets in one.
 
 ## Tests
