@@ -190,6 +190,24 @@ after=$(php "$root/rt.php" "$tpl/my-rt.xml")
 if [ "$want" = "$after" ]; then ok "replace changes only the host"; else out="$want
 $after"; bad "replace changes only the host"; fi
 
+# --- removing a port binding
+reset_template
+run rb0 '{"template":"my-app.xml","append_extra_params":"-p 172.17.0.1:64000:8080"}' "apply dangerous"
+file_has "binding there before removal" "--secret-param=$SECRET -p 172.17.0.1:64000:8080"
+run rb1 '{"template":"my-app.xml","remove_extra_params":"-p 172.17.0.1:64000:8080"}' "apply"
+expect "binding removed" "Written:"
+never "removal doesn't print the rest" "$SECRET"
+file_has "the rest of the value stays" "<ExtraParams>--secret-param=$SECRET</ExtraParams>"
+run rb2 '{"template":"my-app.xml","remove_extra_params":"-p 172.17.0.1:64000:8080"}' "apply"
+expect "removing it again changes nothing" "already match"
+run rb3 '{"template":"my-app.xml","remove_extra_params":"--secret-param=x"}' "apply"
+expect "only port bindings can be removed" "only takes one port binding"
+file_has "refused removal wrote nothing" "--secret-param=$SECRET"
+run rb4 '{"template":"my-app.xml","append_extra_params":"-p 172.17.0.1:64000:80800"}' "apply dangerous"
+run rb5 '{"template":"my-app.xml","remove_extra_params":"-p 172.17.0.1:64000:8080"}' "apply"
+expect "a longer binding isn't matched by a shorter one" "already match"
+file_has "the longer binding stays" "-p 172.17.0.1:64000:80800"
+
 # --- moving a port
 run mv1 '{"template":"my-rt.xml","append_extra_params":"-p 172.17.0.1:53:53","ports":{"remove":[9999]}}' "apply dangerous"
 expect "move refused when the port entry is missing" "can't be moved"
