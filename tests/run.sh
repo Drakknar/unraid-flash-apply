@@ -8,7 +8,7 @@ export FLASH_APPLY_PROPOSALS=/proposals
 tpl="$root/boot/config/plugins/dockerMan/templates-user"
 props="$root/proposals"
 mkdir -p "$tpl" "$props" "$root/etc"
-echo 'version="7.3.4"' > "$root/etc/unraid-version"
+echo 'version="7.4.0"' > "$root/etc/unraid-version"
 SECRET=fake-existing-secret-value
 fails=0
 
@@ -113,6 +113,33 @@ reset_template
 run plain '{"template":"my-app.xml","paths":{"set":[{"container":"/data","host":"/mnt/user/appdata/app/data","mode":"rw"}]},"variables":{"set":{"NEWVAR":"plain"}}}' stop
 never "no warning for an ordinary path and value" "WARNING"
 reset_template
+
+# --- icon
+reset_template
+run ic1 '{"template":"my-app.xml","set":{"Icon":"https://raw.githubusercontent.com/Drakknar/app/main/assets/icon.png"}}' apply
+file_has "icon set with plain apply" "<Icon>https://raw.githubusercontent.com/Drakknar/app/main/assets/icon.png</Icon>"
+for bad_icon in 'javascript:alert(1)' 'http://192.168.1.4/x.png' 'https://x.example/a.png\" onerror=\"x' 'https://x.example/a b.png'; do
+  run ic2 "{\"template\":\"my-app.xml\",\"set\":{\"Icon\":\"$bad_icon\"}}" apply
+  expect "icon refused: $bad_icon" "plain https://"
+done
+
+# --- unRAID 7.4 fields: kept untouched, and the main network can't be changed next to extra networks
+cat > "$tpl/my-xn.xml" <<X
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>xn</Name>
+  <Repository>xn/image:1</Repository>
+  <Network>br0</Network>
+  <ExtraNetworks>proxy-net</ExtraNetworks>
+  <Memory>2g</Memory>
+</Container>
+X
+run xn1 '{"template":"my-xn.xml","set":{"Icon":"https://example.org/xn.png"}}' apply
+if grep -qF '<ExtraNetworks>proxy-net</ExtraNetworks>' "$tpl/my-xn.xml" && grep -qF '<Memory>2g</Memory>' "$tpl/my-xn.xml" && grep -qF '<Icon>https://example.org/xn.png</Icon>' "$tpl/my-xn.xml"; then ok "7.4 fields kept"; else out=$(cat "$tpl/my-xn.xml"); bad "7.4 fields kept"; fi
+run xn2 '{"template":"my-xn.xml","set":{"Network":"bridge"}}' "apply dangerous"
+expect "network refused next to extra networks" "extra networks"
+if grep -qF '<Network>br0</Network>' "$tpl/my-xn.xml"; then ok "refused network wrote nothing"; else out=$(cat "$tpl/my-xn.xml"); bad "refused network wrote nothing"; fi
+rm -f "$tpl/my-xn.xml"
 
 # --- refused proposals
 reset_template
@@ -272,7 +299,7 @@ rm -f "$tpl/my-two.xml"
 
 # --- unRAID version gate
 reset_template
-for v in 'version="8.0.0"' 'version="7.4.0"' 'version="7.4.0-rc.1"' 'version="7.2.9"' 'version="7.30.0"' 'version="6.12.1"' 'nonsense'; do
+for v in 'version="8.0.0"' 'version="7.3.4"' 'version="7.5.0-rc.1"' 'version="7.2.9"' 'version="7.30.0"' 'version="6.12.1"' 'nonsense'; do
   echo "$v" > "$root/etc/unraid-version"
   run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
   expect "version gate refuses: $v" "Refused"
@@ -281,7 +308,7 @@ done
 rm "$root/etc/unraid-version"
 run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
 expect "missing version file refused" "Could not read"
-echo 'version="7.3.9"' > "$root/etc/unraid-version"
+echo 'version="7.4.9"' > "$root/etc/unraid-version"
 run v '{"template":"my-app.xml","variables":{"set":{"NEWVAR":"v"}}}' apply
 expect "same release, newer patch, is allowed" "Written:"
 

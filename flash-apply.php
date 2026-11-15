@@ -6,13 +6,13 @@
 // values are never printed. See README.md.
 
 const MAX_PROPOSAL_BYTES = 262144;
-const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostArgs', 'WebUI'];
+const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostArgs', 'WebUI', 'Icon'];
 const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'remove_extra_params', 'replace_in_variables', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
-// The unRAID release this script was tested on; any 7.3.x counts. Another release may store templates differently, so
+// The unRAID release this script was tested on; any 7.4.x counts. Another release may store templates differently, so
 // it stops until someone has checked and released a version with this number changed. There is deliberately no override.
-const TESTED_RELEASE = '7.3';
+const TESTED_RELEASE = '7.4';
 
 $root = getenv('FLASH_APPLY_ROOT') ?: '';
 $templatesDir = $root . '/boot/config/plugins/dockerMan/templates-user';
@@ -243,6 +243,13 @@ function buildChange(array $proposal): array
 
     foreach ($set as $field => $value) {
         $value = requireText($value, "set.$field");
+
+        // The Docker tab puts the icon URL into an <img> and fetches it; only a plain https address, nothing that could
+        // leave the attribute (quotes, angle brackets, spaces) or point somewhere other than a web server.
+        if ($field === 'Icon' && !preg_match('~^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._\~!$&()*+,;=:@%/-]*$~', $value)) {
+            fail('set.Icon must be a plain https:// address of an image');
+        }
+
         $node = $doc->documentElement->getElementsByTagName($field)->item(0);
         $old = $node ? $node->textContent : '';
 
@@ -253,6 +260,11 @@ function buildChange(array $proposal): array
         // The old value is hidden from the proposal's author and from this display, so it can't be replaced blind.
         if ($field === 'ExtraParams' && trim($old) !== '') {
             fail('ExtraParams already has a value; use append_extra_params, or change it by hand in the Docker tab');
+        }
+
+        // unRAID 7.4 keeps further networks in ExtraNetworks; changing only the main one blind could clash with them.
+        if ($field === 'Network' && trim((string) $doc->documentElement->getElementsByTagName('ExtraNetworks')->item(0)?->textContent) !== '') {
+            fail('This template has extra networks (unRAID 7.4); change its networks in the Docker tab');
         }
 
         if (!$node) {
