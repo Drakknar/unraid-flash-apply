@@ -10,9 +10,9 @@ const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostA
 const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'remove_extra_params', 'replace_in_variables', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
-// The unRAID release this script was tested on; any 7.3.x counts. Another release may store templates differently, so
+// The unRAID release this script was tested on; any 7.4.x counts. Another release may store templates differently, so
 // it stops until someone has checked and released a version with this number changed. There is deliberately no override.
-const TESTED_RELEASE = '7.3';
+const TESTED_RELEASE = '7.4';
 
 $root = getenv('FLASH_APPLY_ROOT') ?: '';
 $templatesDir = $root . '/boot/config/plugins/dockerMan/templates-user';
@@ -260,6 +260,11 @@ function buildChange(array $proposal): array
         // The old value is hidden from the proposal's author and from this display, so it can't be replaced blind.
         if ($field === 'ExtraParams' && trim($old) !== '') {
             fail('ExtraParams already has a value; use append_extra_params, or change it by hand in the Docker tab');
+        }
+
+        // unRAID 7.4 keeps further networks in ExtraNetworks; changing only the main one blind could clash with them.
+        if ($field === 'Network' && trim((string) $doc->documentElement->getElementsByTagName('ExtraNetworks')->item(0)?->textContent) !== '') {
+            fail('This template has extra networks (unRAID 7.4); change its networks in the Docker tab');
         }
 
         if (!$node) {

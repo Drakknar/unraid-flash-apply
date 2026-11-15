@@ -21,7 +21,7 @@ Proposals are read from `/mnt/cache/appdata/code-server/flash-proposals`; set `F
 
 ## unRAID versions
 
-It refuses to run on any unRAID release other than the one in `TESTED_RELEASE` (`7.3` allows any 7.3.x). There is no override: after checking templates on a new release, change the number, release, and reinstall.
+It refuses to run on any unRAID release other than the one in `TESTED_RELEASE` (`7.4` allows any 7.4.x). There is no override: after checking templates on a new release, change the number, release, and reinstall.
 
 ## Proposal format
 
@@ -38,6 +38,8 @@ It refuses to run on any unRAID release other than the one in `TESTED_RELEASE` (
 ```
 
 `remove_extra_params` takes one port binding out of Extra Parameters, such as `-p 172.17.0.1:64000:8080`. It accepts nothing else, because the rest of the value is hidden from the proposal's author.
+
+On 7.4, a template with extra networks (`ExtraNetworks`) can't have its `Network` changed here; new 7.4 fields such as `Memory` are kept as they are.
 
 `set` accepts `Repository`, `Network`, `Privileged`, `ExtraParams`, `PostArgs`, `WebUI` and `Icon` (a plain `https://` image address). `ExtraParams` can only be set while it is empty, because the old value stays hidden; `append_extra_params` adds to the end and keeps what is there. Everything else is refused, including unknown fields, control characters, link files and names with a path.
 
