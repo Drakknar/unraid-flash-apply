@@ -114,6 +114,15 @@ run plain '{"template":"my-app.xml","paths":{"set":[{"container":"/data","host":
 never "no warning for an ordinary path and value" "WARNING"
 reset_template
 
+# --- icon
+reset_template
+run ic1 '{"template":"my-app.xml","set":{"Icon":"https://raw.githubusercontent.com/Drakknar/app/main/assets/icon.png"}}' apply
+file_has "icon set with plain apply" "<Icon>https://raw.githubusercontent.com/Drakknar/app/main/assets/icon.png</Icon>"
+for bad_icon in 'javascript:alert(1)' 'http://192.168.1.4/x.png' 'https://x.example/a.png\" onerror=\"x' 'https://x.example/a b.png'; do
+  run ic2 "{\"template\":\"my-app.xml\",\"set\":{\"Icon\":\"$bad_icon\"}}" apply
+  expect "icon refused: $bad_icon" "plain https://"
+done
+
 # --- refused proposals
 reset_template
 for case in \

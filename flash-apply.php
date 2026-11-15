@@ -6,7 +6,7 @@
 // values are never printed. See README.md.
 
 const MAX_PROPOSAL_BYTES = 262144;
-const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostArgs', 'WebUI'];
+const SET_FIELDS = ['Repository', 'Network', 'Privileged', 'ExtraParams', 'PostArgs', 'WebUI', 'Icon'];
 const PROPOSAL_KEYS = ['template', 'summary', 'set', 'append_extra_params', 'remove_extra_params', 'replace_in_variables', 'variables', 'paths', 'ports'];
 const PATH_MODES = ['rw', 'ro', 'rw,slave', 'ro,slave', 'rw,shared', 'ro,shared'];
 const PROTOCOLS = ['tcp', 'udp'];
@@ -243,6 +243,13 @@ function buildChange(array $proposal): array
 
     foreach ($set as $field => $value) {
         $value = requireText($value, "set.$field");
+
+        // The Docker tab puts the icon URL into an <img> and fetches it; only a plain https address, nothing that could
+        // leave the attribute (quotes, angle brackets, spaces) or point somewhere other than a web server.
+        if ($field === 'Icon' && !preg_match('~^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._\~!$&()*+,;=:@%/-]*$~', $value)) {
+            fail('set.Icon must be a plain https:// address of an image');
+        }
+
         $node = $doc->documentElement->getElementsByTagName($field)->item(0);
         $old = $node ? $node->textContent : '';
 
