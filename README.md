@@ -1,5 +1,7 @@
 # unraid-flash-apply
 
+<img src="assets/icon.svg" alt="" width="96" align="right">
+
 Lets a coding agent propose changes to unRAID Docker templates without being able to write to the flash drive. The agent drops a JSON proposal in a folder; a person at the host's terminal reviews and confirms it. The script does nothing without a terminal.
 
 ## Install (on the unRAID host)
